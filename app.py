@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -140,6 +142,18 @@ def load_model():
 MODEL = load_model()
 
 
+def load_dataset():
+    path = os.path.join(os.path.dirname(__file__), "dataset.csv")
+    if not os.path.exists(path):
+        path = "dataset.csv"
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    return None
+
+
+DATASET = load_dataset()
+
+
 def sigmoid(z):
     return 1.0 / (1.0 + np.exp(-z))
 
@@ -195,25 +209,6 @@ def risk_band(prob):
 def norm_pos(val, rng):
     lo, hi = rng
     return max(0.0, min(100.0, (val - lo) / (hi - lo) * 100.0))
-
-
-def find_patient_record(patient_id):
-    if not patient_id:
-        return None
-
-    path = os.path.join(os.path.dirname(__file__), "dataset.csv")
-    if not os.path.exists(path):
-        path = "dataset.csv"
-    if not os.path.exists(path):
-        return None
-
-    df = pd.read_csv(path)
-    if "ID" not in df.columns:
-        return None
-
-    lookup_value = str(patient_id).strip().lower()
-    matches = df[df["ID"].astype(str).str.strip().str.lower() == lookup_value]
-    return matches.iloc[0] if not matches.empty else None
 
 
 # 2. THEME
@@ -275,42 +270,38 @@ with col_in:
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="eyebrow">Patient Details</div>', unsafe_allow_html=True)
     st.markdown("Enter the available clinical values below to generate a screening estimate.")
+    patient_id = st.text_input("Patient ID", placeholder="Enter patient ID")
 
-    if "patient_id_input" not in st.session_state:
-        st.session_state.patient_id_input = ""
-    if "age_input" not in st.session_state:
-        st.session_state.age_input = 60.5
-    if "sbp_input" not in st.session_state:
-        st.session_state.sbp_input = 101.0
-    if "dbp_input" not in st.session_state:
-        st.session_state.dbp_input = 90.5
-    if "chol_input" not in st.session_state:
-        st.session_state.chol_input = 101.0
+    matched_row = None
+    if DATASET is not None and patient_id and str(patient_id).strip():
+        patient_id_str = str(patient_id).strip().lower()
+        id_matches = DATASET[DATASET["ID"].astype(str).str.strip().str.lower() == patient_id_str]
+        if not id_matches.empty:
+            matched_row = id_matches.iloc[0]
 
-    patient_id = st.text_input("Patient ID", value=st.session_state.patient_id_input)
-    if patient_id != st.session_state.patient_id_input:
-        st.session_state.patient_id_input = patient_id
-        patient_record = find_patient_record(patient_id)
-        if patient_record is not None:
-            st.session_state.age_input = float(patient_record["age"])
-            st.session_state.sbp_input = float(patient_record["systolic_bp"])
-            st.session_state.dbp_input = float(patient_record["diastolic_bp"])
-            st.session_state.chol_input = float(patient_record["cholesterol"])
-            st.success(f"Loaded patient record for ID {patient_id}.")
-        else:
-            st.info("No matching patient record found. You can still enter values manually.")
+    default_age = float(matched_row["age"]) if matched_row is not None and "age" in matched_row.index else 60.5
+    default_sbp = float(matched_row["systolic_bp"]) if matched_row is not None and "systolic_bp" in matched_row.index else 101.0
+    default_dbp = float(matched_row["diastolic_bp"]) if matched_row is not None and "diastolic_bp" in matched_row.index else 90.5
+    default_chol = float(matched_row["cholesterol"]) if matched_row is not None and "cholesterol" in matched_row.index else 101.0
 
-    age = st.slider("Age (years)", float(RANGES["age"][0]), float(RANGES["age"][1]), value=st.session_state.age_input, step=0.5)
-    sbp = st.slider("Systolic BP (mmHg)", float(RANGES["systolic_bp"][0]), float(RANGES["systolic_bp"][1]), value=st.session_state.sbp_input, step=0.5)
-    dbp = st.slider("Diastolic BP (mmHg)", float(RANGES["diastolic_bp"][0]), float(RANGES["diastolic_bp"][1]), value=st.session_state.dbp_input, step=0.5)
-    chol = st.slider("Cholesterol (mg/dL)", float(RANGES["cholesterol"][0]), float(RANGES["cholesterol"][1]), value=st.session_state.chol_input, step=0.5)
-
-    st.session_state.age_input = age
-    st.session_state.sbp_input = sbp
-    st.session_state.dbp_input = dbp
-    st.session_state.chol_input = chol
-
+    age = st.slider("Age (years)", float(RANGES["age"][0]), float(RANGES["age"][1]), default_age, 0.5)
+    sbp = st.slider("Systolic BP (mmHg)", float(RANGES["systolic_bp"][0]), float(RANGES["systolic_bp"][1]), default_sbp, 0.5)
+    dbp = st.slider("Diastolic BP (mmHg)", float(RANGES["diastolic_bp"][0]), float(RANGES["diastolic_bp"][1]), default_dbp, 0.5)
+    chol = st.slider("Cholesterol (mg/dL)", float(RANGES["cholesterol"][0]), float(RANGES["cholesterol"][1]), default_chol, 0.5)
     prob, contributions, pulse_pressure = compute_risk(age, sbp, dbp, chol)
+    prediction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if matched_row is not None:
+        actual_outcome = str(matched_row.get("prognosis", "Unknown")).replace("_", " ")
+        st.markdown(
+            f'<div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(47,168,152,0.10);border:1px solid rgba(47,168,152,0.25);font-size:12px;color:#EDEAE1;">'
+            f'<strong>Matched dataset record</strong><br/>'
+            f'Age: <span class="metric-mono">{matched_row["age"]:.1f}</span> · '
+            f'Systolic BP: <span class="metric-mono">{matched_row["systolic_bp"]:.1f}</span> · '
+            f'Diastolic BP: <span class="metric-mono">{matched_row["diastolic_bp"]:.1f}</span><br/>'
+            f'Cholesterol: <span class="metric-mono">{matched_row["cholesterol"]:.1f}</span> · '
+            f'Real outcome: <span class="metric-mono">{actual_outcome}</span></div>',
+            unsafe_allow_html=True,
+        )
     st.markdown(
         f'<div style="margin-top:10px;font-size:12px;color:#5C7A70;">'
         f'Derived pulse pressure: <span class="metric-mono" style="color:#EDEAE1;">{pulse_pressure:.1f} mmHg</span></div>',
@@ -321,25 +312,20 @@ with col_in:
 with col_gauge:
     label, color = risk_band(prob)
     prediction_label = "Retinopathy" if prob >= 0.5 else "No Retinopathy"
-    prediction_time = pd.Timestamp.now().strftime("%d-%b-%Y %I:%M %p")
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown('<div class="eyebrow">Prediction</div>', unsafe_allow_html=True)
     st.markdown("This estimate updates automatically as you adjust the clinical inputs.")
+    st.metric("Risk %", f"{prob * 100:.1f}%")
+    st.metric("Prediction", prediction_label)
     st.markdown(
-        f'<div style="padding:14px;border:1px solid rgba(232,180,84,0.25);border-radius:12px;background:rgba(255,255,255,0.03);">'
-        f'<div style="font-size:12px;color:#5C7A70;">Patient ID</div>'
-        f'<div style="font-size:18px;font-weight:700;color:#EDEAE1;">{patient_id}</div>'
-        f'<div style="margin-top:8px;font-size:12px;color:#5C7A70;">Prediction</div>'
-        f'<div style="font-size:18px;font-weight:700;color:#EDEAE1;">{prediction_label}</div>'
-        f'<div style="margin-top:8px;font-size:12px;color:#5C7A70;">Risk Score</div>'
-        f'<div style="font-size:18px;font-weight:700;color:#EDEAE1;">{prob * 100:.1f}%</div>'
-        f'<div style="margin-top:8px;font-size:12px;color:#5C7A70;">Prediction Time</div>'
-        f'<div style="font-size:14px;color:#EDEAE1;">{prediction_time}</div>'
+        f'<div style="margin-top:12px;padding:12px;border-radius:12px;background:rgba(232,180,84,0.10);border:1px solid rgba(232,180,84,0.25);">'
+        f'<div style="font-size:12px;color:#9CA8A3;">Patient ID: <span class="metric-mono" style="color:#EDEAE1;">{patient_id or "Not provided"}</span></div>'
+        f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Prediction: <span class="metric-mono" style="color:#EDEAE1;">{prediction_label}</span></div>'
+        f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Risk Score: <span class="metric-mono" style="color:#EDEAE1;">{prob * 100:.1f}%</span></div>'
+        f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Prediction Time: <span class="metric-mono" style="color:#EDEAE1;">{prediction_time}</span></div>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.metric("Risk %", f"{prob * 100:.1f}%")
-    st.metric("Prediction", prediction_label)
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
