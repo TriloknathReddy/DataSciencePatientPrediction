@@ -8,9 +8,11 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Diabetic Retinopathy Prediction in Patients", layout="wide")
 
-# 1. MODEL — trained live on dataset.csv if present, else the
-#    real coefficients from that same training run (fallback so
-#    the app always works even without the CSV alongside it).
+# ---------------------------------------------------------------------------
+# 1. MODEL — trained live on dataset.csv if present, else the real
+#    coefficients from that same training run (fallback so the app always
+#    works even without the CSV alongside it).
+# ---------------------------------------------------------------------------
 FEATURE_COLS = ["age", "systolic_bp", "diastolic_bp", "cholesterol", "pulse_pressure"]
 FEATURE_LABELS = ["Age", "Systolic BP", "Diastolic BP", "Cholesterol", "Pulse Pressure"]
 
@@ -48,114 +50,105 @@ RANGES = {
     "cholesterol": (70, 150),
 }
 
+RENAME_MAP = {"systolic_bp": "Systolic BP", "diastolic_bp": "Diastolic BP",
+              "cholesterol": "Cholesterol", "age": "Age", "pulse_pressure": "Pulse Pressure"}
+
+
+def _dataset_path():
+    local = os.path.join(os.path.dirname(__file__), "dataset.csv")
+    return local if os.path.exists(local) else "dataset.csv"
+
 
 @st.cache_resource(show_spinner="Training models on dataset.csv ...")
 def load_model():
     """Train live on dataset.csv if it's next to this script; otherwise fall
     back to the parameters already trained on that file, so the app is never
     blocked on a missing CSV."""
-    path = os.path.join(os.path.dirname(__file__), "dataset.csv")
+    path = _dataset_path()
     if not os.path.exists(path):
-        path = "dataset.csv"
-
-    if os.path.exists(path):
-        from sklearn.preprocessing import StandardScaler, LabelEncoder
-        from sklearn.model_selection import train_test_split
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.tree import DecisionTreeClassifier
-        from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-        from sklearn.neighbors import KNeighborsClassifier
-        from sklearn.svm import SVC
-        from sklearn.naive_bayes import GaussianNB
-        from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
-
-        df = pd.read_csv(path)
-        df = df.drop(columns=["ID"], errors="ignore")
-        df["pulse_pressure"] = df["systolic_bp"] - df["diastolic_bp"]
-
-        le = LabelEncoder()
-        y = le.fit_transform(df["prognosis"])  # 0 = no_retinopathy, 1 = retinopathy
-        X = df[FEATURE_COLS]
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
-        scaler = StandardScaler().fit(X_train)
-        X_train_s, X_test_s = scaler.transform(X_train), scaler.transform(X_test)
-
-        models = {
-            "Logistic Regression": LogisticRegression(random_state=42),
-            "Decision Tree": DecisionTreeClassifier(random_state=42),
-            "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
-            "Gradient Boosting": GradientBoostingClassifier(random_state=42),
-            "KNN": KNeighborsClassifier(n_neighbors=5),
-            "SVM": SVC(random_state=42, probability=True),
-            "Naive Bayes": GaussianNB(),
-        }
-        rows = []
-        for name, m in models.items():
-            m.fit(X_train_s, y_train)
-            pred = m.predict(X_test_s)
-            prob = m.predict_proba(X_test_s)[:, 1] if hasattr(m, "predict_proba") else m.decision_function(X_test_s)
-            rows.append({
-                "Model": name,
-                "Accuracy": accuracy_score(y_test, pred),
-                "F1": f1_score(y_test, pred),
-                "AUC": roc_auc_score(y_test, prob),
-            })
-        results = pd.DataFrame(rows).sort_values("AUC", ascending=False).reset_index(drop=True)
-
-        lr = models["Logistic Regression"]
-        rf = models["Random Forest"]
-        rf_importance = pd.Series(rf.feature_importances_, index=FEATURE_COLS).rename({
-            "systolic_bp": "Systolic BP", "diastolic_bp": "Diastolic BP",
-            "cholesterol": "Cholesterol", "age": "Age", "pulse_pressure": "Pulse Pressure",
-        }).sort_values(ascending=False)
-
-        df["prognosis_label"] = le.inverse_transform(y)
-        group_means = {
-            "healthy": df[df.prognosis_label == "no_retinopathy"][FEATURE_COLS[:4]].mean().to_dict(),
-            "risk": df[df.prognosis_label == "retinopathy"][FEATURE_COLS[:4]].mean().to_dict(),
-        }
-
-        sample = pd.concat([
-            df[df.prognosis_label == "no_retinopathy"].sample(min(220, (df.prognosis_label == "no_retinopathy").sum()), random_state=42),
-            df[df.prognosis_label == "retinopathy"].sample(min(220, (df.prognosis_label == "retinopathy").sum()), random_state=42),
-        ])[FEATURE_COLS[:4] + ["prognosis_label"]]
-
         return {
-            "scaler_mean": scaler.mean_, "scaler_scale": scaler.scale_,
-            "lr_coef": lr.coef_[0], "lr_intercept": lr.intercept_[0],
-            "results": results, "rf_importance": rf_importance,
-            "group_means": group_means, "sample": sample, "live": True,
+            "scaler_mean": FALLBACK_SCALER_MEAN, "scaler_scale": FALLBACK_SCALER_SCALE,
+            "lr_coef": FALLBACK_LR_COEF, "lr_intercept": FALLBACK_LR_INTERCEPT,
+            "results": FALLBACK_RESULTS, "rf_importance": FALLBACK_RF_IMPORTANCE,
+            "group_means": FALLBACK_GROUP_MEANS, "sample": None, "live": False,
         }
 
-    # fallback: no dataset.csv found alongside the script
+    from sklearn.preprocessing import StandardScaler, LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.svm import SVC
+    from sklearn.naive_bayes import GaussianNB
+    from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+
+    df = pd.read_csv(path).drop(columns=["ID"], errors="ignore")
+    df["pulse_pressure"] = df["systolic_bp"] - df["diastolic_bp"]
+
+    le = LabelEncoder()
+    y = le.fit_transform(df["prognosis"])  # 0 = no_retinopathy, 1 = retinopathy
+    X = df[FEATURE_COLS]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    scaler = StandardScaler().fit(X_train)
+    X_train_s, X_test_s = scaler.transform(X_train), scaler.transform(X_test)
+
+    models = {
+        "Logistic Regression": LogisticRegression(random_state=42),
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=42),
+        "KNN": KNeighborsClassifier(n_neighbors=5),
+        "SVM": SVC(random_state=42, probability=True),
+        "Naive Bayes": GaussianNB(),
+    }
+    rows = []
+    for name, m in models.items():
+        m.fit(X_train_s, y_train)
+        pred = m.predict(X_test_s)
+        prob = m.predict_proba(X_test_s)[:, 1] if hasattr(m, "predict_proba") else m.decision_function(X_test_s)
+        rows.append({
+            "Model": name,
+            "Accuracy": accuracy_score(y_test, pred),
+            "F1": f1_score(y_test, pred),
+            "AUC": roc_auc_score(y_test, prob),
+        })
+    results = pd.DataFrame(rows).sort_values("AUC", ascending=False).reset_index(drop=True)
+
+    lr, rf = models["Logistic Regression"], models["Random Forest"]
+    rf_importance = pd.Series(rf.feature_importances_, index=FEATURE_COLS) \
+        .rename(RENAME_MAP).sort_values(ascending=False)
+
+    df["prognosis_label"] = le.inverse_transform(y)
+    group_means = {
+        "healthy": df[df.prognosis_label == "no_retinopathy"][FEATURE_COLS[:4]].mean().to_dict(),
+        "risk": df[df.prognosis_label == "retinopathy"][FEATURE_COLS[:4]].mean().to_dict(),
+    }
+
+    sample = pd.concat([
+        df[df.prognosis_label == g].sample(min(220, (df.prognosis_label == g).sum()), random_state=42)
+        for g in ("no_retinopathy", "retinopathy")
+    ])[FEATURE_COLS[:4] + ["prognosis_label"]]
+
     return {
-        "scaler_mean": FALLBACK_SCALER_MEAN, "scaler_scale": FALLBACK_SCALER_SCALE,
-        "lr_coef": FALLBACK_LR_COEF, "lr_intercept": FALLBACK_LR_INTERCEPT,
-        "results": FALLBACK_RESULTS, "rf_importance": FALLBACK_RF_IMPORTANCE,
-        "group_means": FALLBACK_GROUP_MEANS, "sample": None, "live": False,
+        "scaler_mean": scaler.mean_, "scaler_scale": scaler.scale_,
+        "lr_coef": lr.coef_[0], "lr_intercept": lr.intercept_[0],
+        "results": results, "rf_importance": rf_importance,
+        "group_means": group_means, "sample": sample, "live": True,
     }
 
 
-MODEL = load_model()
-
-
+@st.cache_resource
 def load_dataset():
-    path = os.path.join(os.path.dirname(__file__), "dataset.csv")
-    if not os.path.exists(path):
-        path = "dataset.csv"
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    return None
+    path = _dataset_path()
+    return pd.read_csv(path) if os.path.exists(path) else None
 
 
+MODEL = load_model()
 DATASET = load_dataset()
-
-
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
 
 
 def compute_risk(age, sbp, dbp, chol):
@@ -164,37 +157,25 @@ def compute_risk(age, sbp, dbp, chol):
     scaled = (raw - MODEL["scaler_mean"]) / MODEL["scaler_scale"]
     contributions = scaled * MODEL["lr_coef"]
     z = MODEL["lr_intercept"] + contributions.sum()
-    prob = sigmoid(z)
+    prob = 1.0 / (1.0 + np.exp(-z))
     return prob, contributions, pp
 
 
-def build_live_profile_summary(age, sbp, dbp, chol, contributions):
-    healthy = MODEL["group_means"]["healthy"]
-    risk = MODEL["group_means"]["risk"]
-    current_vals = {
-        "Age": age,
-        "Systolic BP": sbp,
-        "Diastolic BP": dbp,
-        "Cholesterol": chol,
-    }
+def build_profile_summary(age, sbp, dbp, chol, contributions):
+    healthy, risk = MODEL["group_means"]["healthy"], MODEL["group_means"]["risk"]
+    current_vals = {"Age": age, "Systolic BP": sbp, "Diastolic BP": dbp, "Cholesterol": chol}
+
     metric_rows = []
-    for label, key in [("Age", "age"), ("Systolic BP", "systolic_bp"), ("Diastolic BP", "diastolic_bp"), ("Cholesterol", "cholesterol")]:
-        current = current_vals[label]
-        healthy_mean = healthy[key]
-        risk_mean = risk[key]
+    for label, key in [("Age", "age"), ("Systolic BP", "systolic_bp"),
+                        ("Diastolic BP", "diastolic_bp"), ("Cholesterol", "cholesterol")]:
+        current, healthy_mean, risk_mean = current_vals[label], healthy[key], risk[key]
         delta = current - healthy_mean
-        if abs(current - healthy_mean) <= abs(current - risk_mean):
-            risk_label = "low health risk"
-        elif abs(current - risk_mean) < abs(current - healthy_mean):
-            risk_label = "high health risk"
-        else:
-            risk_label = "moderate health risk"
+        risk_label = "low health risk" if abs(delta) <= abs(current - risk_mean) else "high health risk"
         metric_rows.append((label, current, healthy_mean, risk_mean, delta, risk_label))
 
-    top_idx = int(np.argmax(np.abs(np.array(contributions, dtype=float))))
+    top_idx = int(np.argmax(np.abs(np.asarray(contributions, dtype=float))))
     top_label = FEATURE_LABELS[top_idx]
-    top_contrib = contributions[top_idx]
-    top_text = "raises the score" if top_contrib >= 0 else "reduces the score"
+    top_text = "raises the score" if contributions[top_idx] >= 0 else "reduces the score"
     return metric_rows, top_label, top_text
 
 
@@ -211,8 +192,32 @@ def norm_pos(val, rng):
     return max(0.0, min(100.0, (val - lo) / (hi - lo) * 100.0))
 
 
-# 2. THEME
-st.markdown("""
+# ---------------------------------------------------------------------------
+# 2. SMALL UI HELPERS (collapse repeated markdown/plotly boilerplate)
+# ---------------------------------------------------------------------------
+def html(s):
+    st.markdown(s, unsafe_allow_html=True)
+
+
+def panel_start(eyebrow, subtitle=None):
+    html('<div class="panel">')
+    html(f'<div class="eyebrow">{eyebrow}</div>')
+    if subtitle:
+        st.markdown(subtitle)
+
+
+def panel_end():
+    html("</div>")
+
+
+TRANSPARENT_LAYOUT = dict(paper_bgcolor="rgba(0,0,0,0)", font={"color": "#EDEAE1"})
+AXIS_STYLE = dict(gridcolor="rgba(237,234,225,0.08)", color="#9CA8A3")
+
+
+# ---------------------------------------------------------------------------
+# 3. THEME
+# ---------------------------------------------------------------------------
+html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 .stApp {
@@ -236,98 +241,100 @@ h1, h2, h3 { font-family: 'Space Grotesk', sans-serif !important; }
 }
 .metric-mono { font-family: 'IBM Plex Mono', monospace; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
-# 3. HERO
+# ---------------------------------------------------------------------------
+# 4. HERO
+# ---------------------------------------------------------------------------
 top_l, top_r = st.columns([2.2, 1])
 with top_l:
-    st.markdown('<div class="eyebrow">Ophthalmic screening model · logistic regression</div>', unsafe_allow_html=True)
+    html('<div class="eyebrow">Ophthalmic screening model · logistic regression</div>')
     st.markdown("# Diabetic Retinopathy Prediction in Patients")
     st.markdown(
-        "This dashboard presents a simple screening workflow for diabetic retinopathy risk, using age, blood pressure, and cholesterol to estimate potential risk and compare the patient against a population reference."
+        "This dashboard presents a simple screening workflow for diabetic retinopathy risk, "
+        "using age, blood pressure, and cholesterol to estimate potential risk and compare the "
+        "patient against a population reference."
     )
     st.markdown("### Home Page")
-    st.markdown("Use the patient details section below to enter the available measurements and review an instant risk assessment, supporting analysis, and model performance summary.")
+    st.markdown("Use the patient details section below to enter the available measurements and "
+                "review an instant risk assessment, supporting analysis, and model performance summary.")
 with top_r:
     best_auc = MODEL["results"]["AUC"].max()
     lr_row = MODEL["results"][MODEL["results"].Model == "Logistic Regression"]
     lr_acc = float(lr_row["Accuracy"].iloc[0]) if not lr_row.empty else 0.7675
     tag = "live-trained" if MODEL["live"] else "pretrained fallback"
-    st.markdown(
+    html(
         f'<div style="text-align:right; margin-top:28px;">'
         f'<span class="badge">AUC {best_auc:.3f}</span>'
         f'<span class="badge">Accuracy {lr_acc*100:.1f}%</span>'
-        f'<br><span style="font-size:11px;color:#5C7A70;">model: {tag}</span></div>',
-        unsafe_allow_html=True,
+        f'<br><span style="font-size:11px;color:#5C7A70;">model: {tag}</span></div>'
     )
 
 st.markdown("---")
 
-# 4. INPUTS + LIVE GAUGE
+# ---------------------------------------------------------------------------
+# 5. INPUTS + LIVE GAUGE
+# ---------------------------------------------------------------------------
 col_in, col_gauge = st.columns([1, 1.4])
 
 with col_in:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">Patient Details</div>', unsafe_allow_html=True)
-    st.markdown("Enter the available clinical values below to generate a screening estimate.")
+    panel_start("Patient Details",
+                "Enter the available clinical values below to generate a screening estimate.")
     patient_id = st.text_input("Patient ID", placeholder="Enter patient ID")
 
     matched_row = None
     if DATASET is not None and patient_id and str(patient_id).strip():
-        patient_id_str = str(patient_id).strip().lower()
-        id_matches = DATASET[DATASET["ID"].astype(str).str.strip().str.lower() == patient_id_str]
-        if not id_matches.empty:
-            matched_row = id_matches.iloc[0]
+        pid = str(patient_id).strip().lower()
+        matches = DATASET[DATASET["ID"].astype(str).str.strip().str.lower() == pid]
+        if not matches.empty:
+            matched_row = matches.iloc[0]
 
-    default_age = float(matched_row["age"]) if matched_row is not None and "age" in matched_row.index else 60.5
-    default_sbp = float(matched_row["systolic_bp"]) if matched_row is not None and "systolic_bp" in matched_row.index else 101.0
-    default_dbp = float(matched_row["diastolic_bp"]) if matched_row is not None and "diastolic_bp" in matched_row.index else 90.5
-    default_chol = float(matched_row["cholesterol"]) if matched_row is not None and "cholesterol" in matched_row.index else 101.0
+    defaults = {"age": 60.5, "systolic_bp": 101.0, "diastolic_bp": 90.5, "cholesterol": 101.0}
+    if matched_row is not None:
+        defaults = {k: float(matched_row[k]) if k in matched_row.index else v for k, v in defaults.items()}
 
-    age = st.slider("Age (years)", float(RANGES["age"][0]), float(RANGES["age"][1]), default_age, 0.5)
-    sbp = st.slider("Systolic BP (mmHg)", float(RANGES["systolic_bp"][0]), float(RANGES["systolic_bp"][1]), default_sbp, 0.5)
-    dbp = st.slider("Diastolic BP (mmHg)", float(RANGES["diastolic_bp"][0]), float(RANGES["diastolic_bp"][1]), default_dbp, 0.5)
-    chol = st.slider("Cholesterol (mg/dL)", float(RANGES["cholesterol"][0]), float(RANGES["cholesterol"][1]), default_chol, 0.5)
+    age = st.slider("Age (years)", float(RANGES["age"][0]), float(RANGES["age"][1]), defaults["age"], 0.5)
+    sbp = st.slider("Systolic BP (mmHg)", float(RANGES["systolic_bp"][0]), float(RANGES["systolic_bp"][1]), defaults["systolic_bp"], 0.5)
+    dbp = st.slider("Diastolic BP (mmHg)", float(RANGES["diastolic_bp"][0]), float(RANGES["diastolic_bp"][1]), defaults["diastolic_bp"], 0.5)
+    chol = st.slider("Cholesterol (mg/dL)", float(RANGES["cholesterol"][0]), float(RANGES["cholesterol"][1]), defaults["cholesterol"], 0.5)
+
     prob, contributions, pulse_pressure = compute_risk(age, sbp, dbp, chol)
     prediction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     if matched_row is not None:
         actual_outcome = str(matched_row.get("prognosis", "Unknown")).replace("_", " ")
-        st.markdown(
+        html(
             f'<div style="margin-top:10px;padding:10px;border-radius:10px;background:rgba(47,168,152,0.10);border:1px solid rgba(47,168,152,0.25);font-size:12px;color:#EDEAE1;">'
             f'<strong>Matched dataset record</strong><br/>'
             f'Age: <span class="metric-mono">{matched_row["age"]:.1f}</span> · '
             f'Systolic BP: <span class="metric-mono">{matched_row["systolic_bp"]:.1f}</span> · '
             f'Diastolic BP: <span class="metric-mono">{matched_row["diastolic_bp"]:.1f}</span><br/>'
             f'Cholesterol: <span class="metric-mono">{matched_row["cholesterol"]:.1f}</span> · '
-            f'Real outcome: <span class="metric-mono">{actual_outcome}</span></div>',
-            unsafe_allow_html=True,
+            f'Real outcome: <span class="metric-mono">{actual_outcome}</span></div>'
         )
-    st.markdown(
+    html(
         f'<div style="margin-top:10px;font-size:12px;color:#5C7A70;">'
-        f'Derived pulse pressure: <span class="metric-mono" style="color:#EDEAE1;">{pulse_pressure:.1f} mmHg</span></div>',
-        unsafe_allow_html=True,
+        f'Derived pulse pressure: <span class="metric-mono" style="color:#EDEAE1;">{pulse_pressure:.1f} mmHg</span></div>'
     )
-    st.markdown("</div>", unsafe_allow_html=True)
+    panel_end()
 
 with col_gauge:
     label, color = risk_band(prob)
     prediction_label = "Retinopathy" if prob >= 0.5 else "No Retinopathy"
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">Prediction</div>', unsafe_allow_html=True)
-    st.markdown("This estimate updates automatically as you adjust the clinical inputs.")
+
+    panel_start("Prediction", "This estimate updates automatically as you adjust the clinical inputs.")
     st.metric("Risk %", f"{prob * 100:.1f}%")
     st.metric("Prediction", prediction_label)
-    st.markdown(
+    html(
         f'<div style="margin-top:12px;padding:12px;border-radius:12px;background:rgba(232,180,84,0.10);border:1px solid rgba(232,180,84,0.25);">'
         f'<div style="font-size:12px;color:#9CA8A3;">Patient ID: <span class="metric-mono" style="color:#EDEAE1;">{patient_id or "Not provided"}</span></div>'
         f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Prediction: <span class="metric-mono" style="color:#EDEAE1;">{prediction_label}</span></div>'
         f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Risk Score: <span class="metric-mono" style="color:#EDEAE1;">{prob * 100:.1f}%</span></div>'
         f'<div style="font-size:12px;color:#9CA8A3;margin-top:6px;">Prediction Time: <span class="metric-mono" style="color:#EDEAE1;">{prediction_time}</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
+        f'</div>'
     )
 
-    fig = go.Figure(go.Indicator(
+    gauge = go.Figure(go.Indicator(
         mode="gauge+number",
         value=prob * 100,
         number={"suffix": "%", "font": {"size": 46, "color": "#EDEAE1", "family": "IBM Plex Mono"}},
@@ -344,69 +351,60 @@ with col_gauge:
             "threshold": {"line": {"color": color, "width": 4}, "thickness": 0.9, "value": prob * 100},
         },
     ))
-    fig.update_layout(
-        height=290, margin=dict(t=10, b=0, l=30, r=30),
-        paper_bgcolor="rgba(0,0,0,0)", font={"color": "#EDEAE1"},
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown(
-        f'<div style="text-align:center; font-size:13px; letter-spacing:2px; font-weight:700; color:{color};">{label} RISK</div>',
-        unsafe_allow_html=True,
-    )
+    gauge.update_layout(height=290, margin=dict(t=10, b=0, l=30, r=30), **TRANSPARENT_LAYOUT)
+    st.plotly_chart(gauge, use_container_width=True)
+    html(f'<div style="text-align:center; font-size:13px; letter-spacing:2px; font-weight:700; color:{color};">{label} RISK</div>')
 
-    # feature contribution strip (vessel-style)
-    contrib_html = ""
-    for lab, c in zip(FEATURE_LABELS, contributions):
-        pos = c >= 0
-        dot_color = "#D9502F" if pos else "#2FA898"
-        contrib_html += (
-            f'<span style="margin-right:16px;font-size:12px;color:#9CA8A3;">'
-            f'<span style="color:{dot_color};">●</span> {lab} '
-            f'<span class="metric-mono" style="color:#EDEAE1;">{c:+.2f}</span></span>'
-        )
-    st.markdown(f'<div style="margin-top:8px;text-align:center;">{contrib_html}</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    contrib_html = "".join(
+        f'<span style="margin-right:16px;font-size:12px;color:#9CA8A3;">'
+        f'<span style="color:{"#D9502F" if c >= 0 else "#2FA898"};">●</span> {lab} '
+        f'<span class="metric-mono" style="color:#EDEAE1;">{c:+.2f}</span></span>'
+        for lab, c in zip(FEATURE_LABELS, contributions)
+    )
+    html(f'<div style="margin-top:8px;text-align:center;">{contrib_html}</div>')
+    panel_end()
 
-# 5. RADAR + POPULATION SCATTER
+# ---------------------------------------------------------------------------
+# 6. RADAR + POPULATION SCATTER
+# ---------------------------------------------------------------------------
 col_radar, col_scatter = st.columns(2)
 
 with col_radar:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">Patient Comparison</div>', unsafe_allow_html=True)
+    panel_start("Patient Comparison")
     st.markdown("#### Patient vs. population norms")
 
     metrics = ["age", "systolic_bp", "diastolic_bp", "cholesterol"]
     metric_labels = ["Age", "Systolic BP", "Diastolic BP", "Cholesterol"]
     patient_vals = {"age": age, "systolic_bp": sbp, "diastolic_bp": dbp, "cholesterol": chol}
 
-    patient_r = [norm_pos(patient_vals[m], RANGES[m]) for m in metrics] 
-    risk_r = [norm_pos(MODEL["group_means"]["risk"][m], RANGES[m]) for m in metrics]
-    healthy_r = [norm_pos(MODEL["group_means"]["healthy"][m], RANGES[m]) for m in metrics]
+    def radar_r(source):
+        return [norm_pos(source[m], RANGES[m]) for m in metrics]
+
+    patient_r, risk_r, healthy_r = (radar_r(patient_vals), radar_r(MODEL["group_means"]["risk"]),
+                                     radar_r(MODEL["group_means"]["healthy"]))
 
     radar = go.Figure()
-    radar.add_trace(go.Scatterpolar(r=risk_r + risk_r[:1], theta=metric_labels + metric_labels[:1],
-                                     fill="toself", name="Elevated-risk cohort",
-                                     line=dict(color="#D9502F"), fillcolor="rgba(217,80,47,0.12)"))
-    radar.add_trace(go.Scatterpolar(r=healthy_r + healthy_r[:1], theta=metric_labels + metric_labels[:1],
-                                     fill="toself", name="Healthy cohort",
-                                     line=dict(color="#2FA898"), fillcolor="rgba(47,168,152,0.12)"))
-    radar.add_trace(go.Scatterpolar(r=patient_r + patient_r[:1], theta=metric_labels + metric_labels[:1],
-                                     fill="toself", name="Patient",
-                                     line=dict(color="#E8B454", width=3), fillcolor="rgba(232,180,84,0.25)"))
+    for r, name, line_color, fill_color in [
+        (risk_r, "Elevated-risk cohort", "#D9502F", "rgba(217,80,47,0.12)"),
+        (healthy_r, "Healthy cohort", "#2FA898", "rgba(47,168,152,0.12)"),
+        (patient_r, "Patient", "#E8B454", "rgba(232,180,84,0.25)"),
+    ]:
+        radar.add_trace(go.Scatterpolar(
+            r=r + r[:1], theta=metric_labels + metric_labels[:1], fill="toself", name=name,
+            line=dict(color=line_color, width=3 if name == "Patient" else 2), fillcolor=fill_color,
+        ))
     radar.update_layout(
         polar=dict(bgcolor="rgba(0,0,0,0)",
                    radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, gridcolor="rgba(237,234,225,0.12)"),
                    angularaxis=dict(gridcolor="rgba(237,234,225,0.12)", color="#9CA8A3")),
         showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=-0.2, font=dict(color="#9CA8A3", size=10)),
-        paper_bgcolor="rgba(0,0,0,0)", height=340, margin=dict(t=10, b=10, l=40, r=40),
+        height=340, margin=dict(t=10, b=10, l=40, r=40), **TRANSPARENT_LAYOUT,
     )
     st.plotly_chart(radar, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    panel_end()
 
 with col_scatter:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    label_tag = "live sample" if MODEL["live"] else "440 sampled records"
-    st.markdown(f'<div class="eyebrow">Patient Comparison</div>', unsafe_allow_html=True)
+    panel_start("Patient Comparison")
     st.markdown("#### Age vs. systolic BP (bubble = cholesterol)")
 
     scatter = go.Figure()
@@ -426,21 +424,22 @@ with col_scatter:
         marker=dict(size=18, color="#E8B454", symbol="star", line=dict(width=1.5, color="#070E0C")),
     ))
     scatter.update_layout(
-        xaxis=dict(title="Age", range=[30, 95], gridcolor="rgba(237,234,225,0.08)", color="#9CA8A3"),
-        yaxis=dict(title="Systolic BP", range=[65, 155], gridcolor="rgba(237,234,225,0.08)", color="#9CA8A3"),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=340,
+        xaxis=dict(title="Age", range=[30, 95], **AXIS_STYLE),
+        yaxis=dict(title="Systolic BP", range=[65, 155], **AXIS_STYLE),
+        plot_bgcolor="rgba(0,0,0,0)", height=340,
         legend=dict(orientation="h", yanchor="bottom", y=-0.25, font=dict(color="#9CA8A3", size=10)),
-        margin=dict(t=10, b=10, l=10, r=10),
+        margin=dict(t=10, b=10, l=10, r=10), **TRANSPARENT_LAYOUT,
     )
     st.plotly_chart(scatter, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    panel_end()
 
-# 6. MODEL COMPARISON + FEATURE IMPORTANCE
+# ---------------------------------------------------------------------------
+# 7. MODEL COMPARISON + FEATURE IMPORTANCE
+# ---------------------------------------------------------------------------
 col_models, col_features = st.columns([1.3, 1])
 
 with col_models:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">Model Performance</div>', unsafe_allow_html=True)
+    panel_start("Model Performance")
     st.markdown("#### Comparison of all trained models")
 
     results_sorted = MODEL["results"].sort_values("AUC", ascending=False)
@@ -453,33 +452,28 @@ with col_models:
     bar.update_layout(
         yaxis=dict(range=[0.6, 0.9], title="AUC", gridcolor="rgba(237,234,225,0.06)", color="#9CA8A3"),
         xaxis=dict(color="#9CA8A3", tickangle=-15),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=300,
-        margin=dict(t=20, b=10, l=10, r=10),
+        plot_bgcolor="rgba(0,0,0,0)", height=300, margin=dict(t=20, b=10, l=10, r=10), **TRANSPARENT_LAYOUT,
     )
     st.plotly_chart(bar, use_container_width=True)
     st.caption("Gold bar = Logistic Regression, the model deployed above (best interpretability-to-performance tradeoff).")
-    st.markdown("</div>", unsafe_allow_html=True)
+    panel_end()
 
 with col_features:
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">Risk Analysis</div>', unsafe_allow_html=True)
+    panel_start("Risk Analysis")
     st.markdown("#### Feature contributions and clinical context")
 
-    metric_rows, top_label, top_text = build_live_profile_summary(age, sbp, dbp, chol, contributions)
+    metric_rows, top_label, top_text = build_profile_summary(age, sbp, dbp, chol, contributions)
     for label, current, healthy_mean, risk_mean, delta, risk_label in metric_rows:
-        st.markdown(
+        html(
             f'<div style="margin-bottom:10px;">'
             f'<div style="display:flex;justify-content:space-between;font-size:12px;color:#9CA8A3;">'
             f'<span>{label}</span><span class="metric-mono" style="color:#EDEAE1;">{current:.1f}</span></div>'
             f'<div style="font-size:11px;color:#5C7A70;margin-top:2px;">'
-            f'Healthy mean {healthy_mean:.1f} · Elevated-risk mean {risk_mean:.1f} · {risk_label}</div></div>',
-            unsafe_allow_html=True,
+            f'Healthy mean {healthy_mean:.1f} · Elevated-risk mean {risk_mean:.1f} · {risk_label}</div></div>'
         )
 
-    st.markdown(
+    html(
         f'<div style="margin-top:12px;padding:10px 12px;border-radius:12px;background:rgba(47,168,152,0.10);border:1px solid rgba(47,168,152,0.2);font-size:12px;color:#EDEAE1;">'
-        f'<span style="color:#2FA898;font-weight:700;">Most influential today:</span> {top_label} is the strongest contributor and {top_text}.</div>',
-        unsafe_allow_html=True,
+        f'<span style="color:#2FA898;font-weight:700;">Most influential today:</span> {top_label} is the strongest contributor and {top_text}.</div>'
     )
-    st.markdown("</div>", unsafe_allow_html=True)
-
+    panel_end()
